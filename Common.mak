@@ -5,7 +5,6 @@ PACKAGE_REPOSITORY ?= 0
 # Are we running from synthesis?
 SYNTHESIS := 0
 
-
 ##### Makefile Swiss army knife
 
 override empty :=
@@ -90,6 +89,9 @@ endif
 ifeq ($(PLATFORM),WINDOWS)
     EXESUFFIX := .exe
     DLLSUFFIX := .dll
+endif
+ifeq ($(SUBPLATFORM),RISCOS)
+    EXESUFFIX := ,e1f
 endif
 
 
@@ -504,7 +506,6 @@ L_CXXONLYFLAGS :=
 LIBS :=
 GUI_LIBS :=
 LIBDIRS :=
-
 
 ##### Mandatory platform parameters
 
@@ -1020,7 +1021,11 @@ else ifeq ($(SUBPLATFORM),LINUX)
     LIBS += -lrt
 endif
 
-ifeq (,$(filter $(PLATFORM),WINDOWS WII))
+ifeq ($(SUBPLATFORM),RISCOS)
+    # Static linking for convenience
+    LINKERFLAGS += -static
+    LIBS += -lmikmod
+else ifeq (,$(filter $(PLATFORM),WINDOWS WII))
     ifneq ($(PLATFORM),BSD)
         LIBS += -ldl
     endif
