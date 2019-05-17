@@ -789,6 +789,10 @@ ifeq ($(SUBPLATFORM),LINUX)
     LIBS += -lFLAC -lvorbisfile -lvorbis -logg
 endif
 
+ifeq ($(SUBPLATFORM),RISCOS)
+    LIBS += -lvorbisfile -lvorbis -logg
+endif
+
 ifeq ($(PLATFORM),BSD)
     LIBS += -lFLAC -lvorbisfile -lvorbis -logg -lexecinfo
 endif

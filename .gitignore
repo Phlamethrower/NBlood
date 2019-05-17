@@ -18,6 +18,7 @@ apps/
 *.x64
 *.ppc
 *.app
+*,e1f
 
 *.log
 *.cache
