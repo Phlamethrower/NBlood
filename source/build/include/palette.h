@@ -43,9 +43,11 @@ extern uint8_t PaletteIndexFullbrights[32];
 typedef struct {
     char r, g, b, f;
 } palette_t;
+#pragma pack(push,1)
 typedef struct {
     uint8_t r, g, b;
 } rgb24_t;
+#pragma pack(pop)
 extern palette_t curpalette[256], curpalettefaded[256], palfadergb;
 
 extern char palfadedelta;

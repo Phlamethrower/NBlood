@@ -1075,7 +1075,7 @@ static FORCE_INLINE CONSTEXPR uint64_t B_PASS64(uint64_t const x) { return x; }
 
 // TODO: Determine when, if ever, we should use the bit-shift-and-mask variants
 // due to alignment issues or performance gains.
-#if 1
+#ifndef __arm__
 static FORCE_INLINE void B_BUF16(void * const buf, uint16_t const x) { *(uint16_t *) buf = x; }
 static FORCE_INLINE void B_BUF32(void * const buf, uint32_t const x) { *(uint32_t *) buf = x; }
 static FORCE_INLINE void B_BUF64(void * const buf, uint64_t const x) { *(uint64_t *) buf = x; }

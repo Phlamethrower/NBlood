@@ -50,7 +50,7 @@ void qloadvoxel(int32_t nVoxel)
     char *pVox = (char*)gSysRes.Lock(hVox);
     for (int i = 0; i < MAXVOXMIPS; i++)
     {
-        int nSize = *((int*)pVox);
+        int nSize = B_UNBUF32(pVox);
 #if B_BIG_ENDIAN == 1
         nSize = B_LITTLE32(nSize);
 #endif

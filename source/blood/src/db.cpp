@@ -724,7 +724,7 @@ unsigned int dbReadMapCRC(const char *pPath)
     {
         ThrowError("Map file is wrong version");
     }
-    unsigned int nCRC = *(unsigned int*)(pData+nSize-4);
+    unsigned int nCRC = B_UNBUF32(pData+nSize-4);
     gSysRes.Unlock(pNode);
     return nCRC;
 }
