@@ -17,6 +17,8 @@
 
 #endif
 
+#pragma pack(push,1)
+
 //ceilingstat/floorstat:
 //   bit 0: 1 = parallaxing, 0 = not                                 "P"
 //   bit 1: 1 = groudraw, 0 = not
@@ -57,6 +59,8 @@ typedef struct
     StructTracker(Sector, int16_t) extra;
 } StructName(sectortypev7);
 
+EDUKE32_STATIC_ASSERT(sizeof(StructName(sectortypev7)) == 40);
+
 //cstat:
 //   bit 0: 1 = Blocking wall (use with clipmove, getzrange)         "B"
 //   bit 1: 1 = bottoms of invisible walls swapped, 0 = not          "2"
@@ -92,6 +96,8 @@ typedef struct
     StructTracker(Wall, int16_t) hitag;
     StructTracker(Wall, int16_t) extra;
 } StructName(walltypev7);
+
+EDUKE32_STATIC_ASSERT(sizeof(StructName(walltypev7)) == 32);
 
 //cstat:
 //   bit 0: 1 = Blocking sprite (use with clipmove, getzrange)       "B"
@@ -207,6 +213,8 @@ typedef struct
     StructTracker(Sprite, int16_t) extra;
 } StructName(spritetypev7);
 
+EDUKE32_STATIC_ASSERT(sizeof(StructName(spritetypev7)) == 44);
+
 #ifndef buildtypes_h__enums
 //44 bytes
 // TODO: Remove unused fields from the end of this struct. (TSPRITE_SIZE)
@@ -248,7 +256,11 @@ typedef struct
     };
     int16_t extra;
 } tspritetype;
+
+EDUKE32_STATIC_ASSERT(sizeof(tspritetype) == 44);
 #endif
+
+#pragma pack(pop)
 
 //////////////////// END Version 7 map format ////////////////
 
@@ -276,6 +288,8 @@ typedef struct
     StructTracker(Sector, int16_t) extra;
 } StructName(sectortypevx);
 
+EDUKE32_STATIC_ASSERT(sizeof(StructName(sectortypevx)) == 44);
+
 // 38 bytes
 typedef struct
 {
@@ -296,6 +310,8 @@ typedef struct
     StructTracker(Wall, int16_t) extra;
     StructTracker(Wall, uint8_t) blend, filler_;
 } StructName(walltypevx);
+
+EDUKE32_STATIC_ASSERT(sizeof(StructName(walltypevx)) == 38);
 #endif
 // NOTE: spritetype is currently the same for V7/8/9 and VX in-memory map formats.
 

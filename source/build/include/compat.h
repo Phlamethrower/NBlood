@@ -854,6 +854,8 @@ typedef reg_t unative_t;
 #endif
 EDUKE32_STATIC_ASSERT(sizeof(native_t) == sizeof(unative_t));
 
+#pragma pack(push,1)
+
 typedef struct MAY_ALIAS {
     int32_t x, y;
 } vec2_t;
@@ -917,6 +919,7 @@ typedef struct {
     float x, y, z, w;
 } vec4d_t;
 
+#pragma pack(pop)
 
 ////////// Language tricks that depend on size_t //////////
 
