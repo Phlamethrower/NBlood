@@ -154,6 +154,8 @@ enum
 };
 #endif
 
+#pragma pack(push,1)
+
 //44 bytes
 typedef struct
 {
@@ -178,6 +180,8 @@ typedef struct
     StructTracker(Sprite, int16_t) hitag;
     StructTracker(Sprite, int16_t) extra;
 } StructName(spritetypev7);
+
+#pragma pack(pop)
 
 //////////////////// END Version 7 map format ////////////////
 
