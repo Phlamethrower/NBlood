@@ -280,7 +280,7 @@ void CalcGameChecksum(void)
         length = sizeof(XSPRITE)/4;
         while (length--)
         {
-            sum += *pBuffer++;
+            sum += B_UNBUF32(pBuffer++);
         }
         gChecksum[3] ^= sum;
     }
