@@ -311,6 +311,11 @@ void wm_setapptitle(const char *name)
 static inline char grabmouse_low(char a);
 
 #ifndef __ANDROID__
+#ifdef __riscos__
+extern "C" {
+extern void __write_backtrace(int signo);
+}
+#endif
 static void attach_debugger_here(void) {}
 
 static void sighandler(int signum)
@@ -329,6 +334,9 @@ static void sighandler(int signum)
         // This is useful for attaching the debugger post-mortem. For those pesky
         // cases where the program runs through happily when inspected from the start.
         //        usleep(15000000);
+#endif
+#ifdef __riscos__
+        __write_backtrace(signum);
 #endif
         attach_debugger_here();
         app_crashhandler();
