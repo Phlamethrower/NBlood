@@ -53,6 +53,12 @@ void _SetErrorLoc(const char *pzFile, int nLine)
     _line = nLine;
 }
 
+#ifdef __riscos__
+extern "C" {
+extern void __write_backtrace(int signo);
+}
+#endif
+
 void _ThrowError(const char *pzFormat, ...)
 {
     char buffer[256];
@@ -87,6 +93,10 @@ void _consoleSysMsg(const char* pzFormat, ...) {
 void __dassert(const char * pzExpr, const char * pzFile, int nLine)
 {
     initprintf("Assertion failed: %s in file %s at line %i\n", pzExpr, pzFile, nLine);
+
+#ifdef __riscos__
+    __write_backtrace(0);
+#endif
 
 #ifdef WM_MSGBOX_WINDOW
     char titlebuf[256];
