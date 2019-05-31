@@ -399,7 +399,7 @@ void videoShowFrame(int32_t w)
     }
 
     if (SDL_MUSTLOCK(sdl_surface)) SDL_LockSurface(sdl_surface);
-    softsurface_blitBuffer((uint32_t*) sdl_surface->pixels, sdl_surface->format->BitsPerPixel);
+    softsurface_blitBuffer((uint32_t*) sdl_surface->pixels, sdl_surface->format->BytesPerPixel);
     if (SDL_MUSTLOCK(sdl_surface)) SDL_UnlockSurface(sdl_surface);
 
     SDL_Flip(sdl_surface);

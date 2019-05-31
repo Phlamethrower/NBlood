@@ -42,6 +42,6 @@ vec2_t softsurface_getDestinationBufferResolution();
 // Blit the surface's pixel buffer to the destination buffer using the palette set with softsurface_setPalette().
 // If the surface is not initialized, the function returns immediately.
 void softsurface_blitBuffer(uint32_t* destBuffer,
-                            uint32_t destBpp);
+                            uint32_t destBytesPerPixl);
 
 #endif /* SOFTSURFACE_H_ */
