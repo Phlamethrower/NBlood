@@ -1781,7 +1781,7 @@ void videoShowFrame(int32_t w)
     }
 
     if (SDL_MUSTLOCK(sdl_surface)) SDL_LockSurface(sdl_surface);
-    softsurface_blitBuffer((uint32_t*) sdl_surface->pixels, sdl_surface->format->BitsPerPixel);
+    softsurface_blitBuffer((uint32_t*) sdl_surface->pixels, sdl_surface->format->BytesPerPixel);
     if (SDL_MUSTLOCK(sdl_surface)) SDL_UnlockSurface(sdl_surface);
 
     if (SDL_UpdateWindowSurface(sdl_window))
@@ -1811,10 +1811,22 @@ int32_t videoUpdatePalette(int32_t start, int32_t num)
 #endif
     {
         if (sdl_surface)
-            softsurface_setPalette(curpalettefaded,
-                                   sdl_surface->format->Rmask,
-                                   sdl_surface->format->Gmask,
-                                   sdl_surface->format->Bmask);
+        {
+#if SDL_MAJOR_VERSION == 1 // TODO: SDL 2 version
+            if (sdl_surface->format->BitsPerPixel == 8)
+            {
+                // Assume hardware palette available
+                SDL_SetColors(sdl_surface, ((SDL_Color *)curpalettefaded) + start, start, num);
+            }
+            else
+#endif
+            {
+                softsurface_setPalette(curpalettefaded,
+                                       sdl_surface->format->Rmask,
+                                       sdl_surface->format->Gmask,
+                                       sdl_surface->format->Bmask);
+            }
+        }
     }
 
     return 0;

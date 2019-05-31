@@ -180,26 +180,79 @@ void softsurface_blitBufferInternal(UINTTYPE* destBuffer)
     }
 }
 
+#define NPBLIT(x) pDst[x] = pSrc[pScanPos[x]]
+#define NPBLIT2(x) NPBLIT(x); NPBLIT(x+1)
+#define NPBLIT4(x) NPBLIT2(x); NPBLIT2(x+2)
+#define NPBLIT8(x) NPBLIT4(x); NPBLIT4(x+4)
+#define NPBLIT16(x) NPBLIT8(x); NPBLIT8(x+8)
+#define NPBLIT32(x) NPBLIT16(x); NPBLIT16(x+16)
+#define NPBLIT64(x) NPBLIT32(x); NPBLIT32(x+32)
+template <typename UINTTYPE>
+void softsurface_blitBufferInternalNoPal(UINTTYPE* destBuffer)
+{
+    const uint8_t* __restrict pSrc = buffer;
+    UINTTYPE* __restrict pDst = destBuffer;
+    const UINTTYPE* const pEnd = destBuffer+destBufferRes.x*mulscale16(yScale16, bufferRes.y);
+    uint32_t remainder = 0;
+    while (pDst < pEnd)
+    {
+        if (xScale16 == 65536)
+        {
+            memcpy(pDst, pSrc, sizeof(UINTTYPE)*destBufferRes.x);
+            pDst += bufferRes.x;
+        }
+        else
+        {
+            uint16_t* __restrict pScanPos = scanPosLookupTable;
+            UINTTYPE* const pScanEnd = pDst+destBufferRes.x;
+            while (pDst < pScanEnd-64)
+            {
+                NPBLIT64(0);
+                pDst += 64;
+                pScanPos += 64;
+            }
+            while (pDst < pScanEnd)
+            {
+                NPBLIT(0);
+                ++pDst;
+                ++pScanPos;
+            }
+        }
+        pSrc += bufferRes.x;
+
+        static const uint32_t MASK16 = (1<<16)-1;
+        uint32_t linesCopied = 1;
+        uint32_t linesToCopy = yScale16+remainder;
+        remainder = linesToCopy & MASK16;
+        linesToCopy = (linesToCopy >> 16)-1;
+        const UINTTYPE* const __restrict pScanLineSrc = pDst-destBufferRes.x;
+        while (linesToCopy)
+        {
+            uint32_t lines = min(linesCopied, linesToCopy);
+            memcpy(pDst, pScanLineSrc, sizeof(UINTTYPE)*lines*destBufferRes.x);
+            pDst += lines*destBufferRes.x;
+            linesToCopy -= lines;
+        }
+    }
+}
+
 void softsurface_blitBuffer(uint32_t* destBuffer,
-                            uint32_t destBpp)
+                            uint32_t destBytesPerPixel)
 {
     if (!buffer)
         return;
     if (!destBuffer)
         return;
 
-    switch (destBpp)
+    switch (destBytesPerPixel)
     {
-    case 15:
+    case 1:
+        softsurface_blitBufferInternalNoPal<uint8_t>((uint8_t*) destBuffer);
+        break;
+    case 2:
         softsurface_blitBufferInternal<uint16_t>((uint16_t*) destBuffer);
         break;
-    case 16:
-        softsurface_blitBufferInternal<uint16_t>((uint16_t*) destBuffer);
-        break;
-    case 24:
-        softsurface_blitBufferInternal<uint32_t>(destBuffer);
-        break;
-    case 32:
+    case 4:
         softsurface_blitBufferInternal<uint32_t>(destBuffer);
         break;
     default:
