@@ -4953,7 +4953,12 @@ extern "C" {
             // Set the value of the start_time_ns, such that the first timestamp
             // is at 1ms. This ensures 0 remains a special value.
             uint64_t want_value = current_time_ns - 1 * ns_in_ms;
+#ifdef __riscos__
+            // Hack, no __atomic_compare_exchange_8
+            uint64_t old_value = 0; start_time_ns = want_value;
+#else
             uint64_t old_value = ENET_ATOMIC_CAS(&start_time_ns, 0, want_value);
+#endif
             offset_ns = old_value == 0 ? want_value : old_value;
         }
 
