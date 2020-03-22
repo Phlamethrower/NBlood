@@ -27,7 +27,9 @@ int connectpoint2[MAXPLAYERS];
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef __riscos
 #define USE_IPV6
+#endif
 //#define MMULTI_DEBUG_SENDRECV
 //#define MMULTI_DEBUG_SENDRECV_WIRE
 
@@ -246,6 +248,7 @@ int netinit (int portnum)
 			}
 		}
 
+#ifdef USE_IPV6
 		if (domain == PF_INET6) {
 			// Allow dual-stack IPV4/IPV6 on the socket.
 			if (setsockopt(mysock, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&off, sizeof(off)) != 0) {
@@ -270,7 +273,9 @@ int netinit (int portnum)
 				domain = PF_INET;
 				continue;
 			}
-		} else {
+		} else
+#endif
+		{
 			struct sockaddr_in host;
 			memset(&host, 0, sizeof(host));
 			host.sin_family = AF_INET;
@@ -355,7 +360,7 @@ int netsend (int other, void *dabuf, int bufsiz) //0:buffer full... can't send
 	memset(msg_control, 0, sizeof(msg_control));
 
 	cmsg = CMSG_FIRSTHDR(&msg);
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(__riscos__)
 	// OS X doesn't implement setting the UDP4 source. We'll
 	// just have to cross our fingers.
 	if (replyfrom4[other].s_addr != INADDR_ANY) {
@@ -378,6 +383,7 @@ int netsend (int other, void *dabuf, int bufsiz) //0:buffer full... can't send
 		cmsg = CMSG_NXTHDR(&msg, cmsg);
 	}
 #endif
+#ifdef USE_IPV6
 	if (!IN6_IS_ADDR_UNSPECIFIED(&replyfrom6[other])) {
 		cmsg->cmsg_level = IPPROTO_IPV6;
 		cmsg->cmsg_type = IPV6_PKTINFO;
@@ -386,6 +392,7 @@ int netsend (int other, void *dabuf, int bufsiz) //0:buffer full... can't send
 		len += CMSG_SPACE(sizeof(struct in6_pktinfo));
 		cmsg = CMSG_NXTHDR(&msg, cmsg);
 	}
+#endif
 #ifdef _WIN32
 	msg.Control.len = len;
 	if (len == 0) {
@@ -487,6 +494,7 @@ int netread (int *other, void *dabuf, int bufsiz) //0:no packets in buffer
 #endif
 		}
 #endif
+#ifdef USE_IPV6
 		else if (cmsg->cmsg_level == IPPROTO_IPV6 && cmsg->cmsg_type == IPV6_PKTINFO) {
 			snatchreplyfrom6 = ((struct in6_pktinfo *)CMSG_DATA(cmsg))->ipi6_addr;
 #ifdef MMULTI_DEBUG_SENDRECV_WIRE
@@ -494,6 +502,7 @@ int netread (int *other, void *dabuf, int bufsiz) //0:no packets in buffer
 			debugprintf("mmulti debug recv: received at %s\n", inet_ntop(AF_INET6, &snatchreplyfrom6, addr, sizeof(addr)));
 #endif
 		}
+#endif
 	}
 
 #ifdef MMULTI_DEBUG_SENDRECV_WIRE
@@ -903,6 +912,10 @@ void initmultiplayers (int argc, char const * const argv[])
 
 static int lookuphost(const char *name, struct sockaddr *host, int warnifmany)
 {
+#ifdef __riscos__
+	// GCC headers broken, AI_ADDRCONFIG not defined
+	return 0;
+#else
 	struct addrinfo * result, *res;
 	struct addrinfo hints;
 	char *wname, *portch;
@@ -959,6 +972,7 @@ static int lookuphost(const char *name, struct sockaddr *host, int warnifmany)
 	freeaddrinfo(result);
 	free(wname);
 	return found;
+#endif
 }
 
 void dosendpackets (int other)
