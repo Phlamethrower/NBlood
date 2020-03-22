@@ -21,6 +21,14 @@
 # define HAVE_TIMER_SDL
 #endif
 
+#if defined(__riscos__) && !defined(HAVE_TIMER_SDL)
+// Hack, use system time because we don't have anything better
+#define HAVE_TIMER_SDL
+#define SDL_GetPerformanceCounter clock
+static inline int SDL_GetPerformanceFrequency() { return CLOCKS_PER_SEC; }
+#define SDL_InitSubSystem(A) ((void) 0)
+#endif
+
 #if !defined _WIN32 && !defined HAVE_TIMER_SDL && !defined ZPL_HAVE_RDTSC
 # error No platform timer implementation!
 #endif

@@ -144,7 +144,7 @@ zpl_inline zpl_u64 zpl_rdtsc(void) {
 
     return result;
 }
-#elif defined EDUKE32_CPU_ARM
+#elif defined EDUKE32_CPU_ARM && !defined(__riscos__)
 #define ZPL_HAVE_RDTSC
 zpl_inline zpl_u64 zpl_rdtsc(void) {
 #if defined(__aarch64__)
