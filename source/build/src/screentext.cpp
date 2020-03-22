@@ -211,7 +211,7 @@ vec2_t screentextRender(ScreenText_t const & data)
     glyph_t const * text = data.text;
     glyph_t const * const end = data.text + data.len;
 
-    ScreenTextSize_t sizedata{data.size};
+    ScreenTextSize_t sizedata = data.size;
     sizedata.f &= ~(TEXT_XJUSTIFY|TEXT_YJUSTIFY);
     if (data.f & TEXT_XJUSTIFY)
         sizedata.between.x = 0;
@@ -370,7 +370,7 @@ vec2_t screentextRender(ScreenText_t const & data)
         else
         {
             uint16_t const tile = screentextGlyphGetTile(glyph);
-            vec2_t location{data.pos};
+            vec2_t location = data.pos;
 
             AddCoordsFromRotation(&location, &Xdirection, origin.x);
             AddCoordsFromRotation(&location, &Ydirection, origin.y);
@@ -413,7 +413,7 @@ vec2_t screentextRender(ScreenText_t const & data)
 
 vec2_t screentextRenderShadow(ScreenText_t const & data, vec2_t shadowpos, int32_t shadowpal)
 {
-    ScreenText_t shadow{data};
+    ScreenText_t shadow = data;
     shadow.pos.x += mulscale16(shadowpos.x, data.zoom);
     shadow.pos.y += mulscale16(shadowpos.y, data.zoom);
     shadow.shade = 127;
