@@ -580,6 +580,10 @@ else ifeq ($(PLATFORM),SKYOS)
 else ifeq ($(SUBPLATFORM),LINUX)
     # Locate .so files
     LINKERFLAGS += -Wl,-rpath,'$$ORIGIN' -Wl,-z,origin
+else ifeq ($(SUBPLATFORM),RISCOS)
+    # inttypes.h may include stdint.h; if this happens, make sure stdint.h
+    # defines the limit macros
+    COMPILERFLAGS += -D__STDC_LIMIT_MACROS
 endif
 ASFLAGS += -f $(ASFORMAT)
 
