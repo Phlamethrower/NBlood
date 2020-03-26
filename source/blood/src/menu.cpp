@@ -2319,4 +2319,5 @@ void drawLoadingScreen(void)
     else
         sprintf(buffer, "%s", zNetGameTypes[gGameOptions.nGameType-1]);
     viewLoadingScreen(2049, buffer, levelGetTitle(), NULL);
+    videoNextPage();
 }
