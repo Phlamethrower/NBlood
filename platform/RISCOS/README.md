@@ -1,7 +1,7 @@
 # NBlood for RISC OS
 
 ## Building
-1. Build libsdl1.2debian & libsdl-mixer1.2 using the GCCSDK autobuilder
+1. Build libsdl1.2debian using the GCCSDK autobuilder
 2. `source` the `env/ro-path` file from your GCCSDK install
 3. `./platform/riscosbuild.sh`
 
@@ -10,7 +10,7 @@ See the main NBlood readme file for details on which data files are needed. You'
 
 Note that as with other RISC OS SDL apps, you'll need to make sure to redirect stdout & stderr to file or `null:` to avoid the output interfering with things.
 
-It's recommended to have the DRenderer & Freepats packages installed from PackMan in order to get sound + music.
+It's recommended to have the DRenderer package installed from PackMan in order to get sound + music.
 
 ## Issues
 
@@ -20,3 +20,4 @@ It's recommended to have the DRenderer & Freepats packages installed from PackMa
 * It's a CPU hog - ARM versions of the assembler plotting routines are needed, but also the audio mixing appears to be using a disproportionately high amount of CPU time, mainly due to using floating point math for volume scaling/mixing
   * NBlood prefers to run in a colour depth which matches the current screen colour depth. So you can get a little bit more performance by switching to an 8bpp mode before running. (Note the `ScreenBPP = 8` in the config file merely means that the software renderer is in use, as opposed to the (unsupported) OpenGL renderer)
 * Although some paths can be configured on the command line, NBlood is hardcoded to read/write save games and some other files to the current directory
+* The ".SF2 Synth" MIDI driver requires you to have a .SF2 format SoundFont installed in the !NBlood folder. So far I haven't been able to confirm that the feature works (the sound font I tried failed to load), but be warned that it's likely to have much lower performance than the OPL synth, due to all the audio mixing being performed wih floating point math.
