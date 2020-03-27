@@ -595,6 +595,8 @@ int engineFPSLimit(void)
         return true;
 
     g_frameDelay = calcFrameDelay(r_maxfps, r_maxfpsoffset);
+    if (!g_frameDelay)
+      g_frameDelay = 1;
 
     uint64_t const  frameJitter = timerGetPerformanceFrequency() / 1000ull;
     uint64_t        frameTicks;
