@@ -73,6 +73,47 @@ uint32_t MV_MixStereo(struct VoiceNode * const voice, uint32_t length)
     uint32_t const rate     = voice->RateScale;
     fix16_t  const volume   = fix16_fast_trunc_mul(voice->volume, MV_GlobalVolume);
 
+#ifdef __arm__
+    /* ARM optimised mixing for 16bit stereo destination, suitable for any 32bit
+       ARM. Note: Currently doesn't implement smooth volume changes. */
+    if ((sizeof(D) == 2) && (MV_RightChannelOffset == 2))
+    {
+        int32_t leftvol = fix16_min(fix16_fast_trunc_mul(volume, voice->LeftVolume), fix16_one);
+        int32_t rightvol = fix16_min(fix16_fast_trunc_mul(volume, voice->RightVolume), fix16_one);
+        int32_t * __restrict dest32 = (int32_t *) dest;
+
+        do
+        {
+            int const isample0 = CONVERT_LE_SAMPLE_TO_SIGNED<S, D>(source[position >> 16]);
+
+            position += rate;
+
+            int32_t mix = *dest32;
+            int32_t left,right;
+            uint32_t magic = 0x80000000;
+
+            int32_t const sample0L = isample0*leftvol;
+            int32_t const sample0R = isample0*rightvol;
+
+            /* 32bit saturating add: left = sample0L + (mix<<16) */
+            asm("adds %0,%1,%2,lsl #16\n\tsbcvs %0,%3,#0" : "=r" (left) : "r" (sample0L), "r" (mix), "r" (magic) : "cc");
+
+            /* right = sample0R + mix */
+            asm("adds %0,%1,%2\n\tsbcvs %0,%3,#0" : "=r" (right) : "r" (sample0R), "r" (mix), "r" (magic) : "cc");
+
+            *dest32++ = (((uint32_t)left)>>16) | (right & 0xffff0000);
+        }
+        while (--length);
+
+        voice->LeftVolume = voice->LeftVolumeDest;
+        voice->RightVolume = voice->RightVolumeDest;
+
+        MV_MixDestination = (char *) dest32;
+
+        return position;
+    }
+#endif
+
     do
     {
         auto const isample0 = CONVERT_LE_SAMPLE_TO_SIGNED<S, D>(source[position >> 16]);

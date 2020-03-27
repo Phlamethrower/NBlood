@@ -101,7 +101,12 @@ static inline int CONVERT_LE_SAMPLE_TO_SIGNED(S src);
 template<>
 inline int CONVERT_LE_SAMPLE_TO_SIGNED<uint8_t, int16_t>(uint8_t src)
 {
+#if defined(__arm__)
+    /* Slightly better output with GCC (4.7.4) */
+    return (((int)src) << 8) - 32768;
+#else
     return FLIP_SIGN(src) << 8;
+#endif
 }
 
 template<>
