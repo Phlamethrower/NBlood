@@ -1940,7 +1940,217 @@ static WSHELPER_DECL void calc_vplcinc(uint32_t *vplc, int32_t *vinc, const int3
 # endif
 #endif
 
+#if defined(USE_ASMARM)
+// The ARM optimised routines accept a list of vertical lines as input
+// (forming a rectangle on screen)
+typedef struct {
+    uint32_t vpos;
+    uint8_t *buf;
+    uint32_t vinc;
+    uint8_t *pal;
+} vline;
 
+typedef struct {
+    int min;
+    int max;
+} minmax;
+
+static vline s_vlines[MAXXDIM];
+static minmax s_yminmax[MAXXDIM];
+
+extern "C" {
+extern void vblockasm(int h,vline *lines,int w);
+extern void vblocknasm(int h,vline *lines,int w);
+extern void mvblockasm(int h,vline *lines,int w);
+extern void mvblocknasm(int h,vline *lines,int w);
+extern void tvblockasm(int h,vline *lines,int w);
+extern void tvblocknasm(int h,vline *lines,int w);
+extern intptr_t arm_frameoffset;
+extern int32_t arm_tilesize;
+}
+intptr_t arm_frameoffset;
+int32_t arm_tilesize;
+
+static void vlineblock(int width,void (*func)(int h,vline *lines,int w),int scralign)
+{
+    int x=0;
+    intptr_t p = arm_frameoffset;
+    int bpl = ylookup[1];
+    while (width > 0)
+    {
+        /* Calculate width we can draw at */
+        int align = (p | bpl) & scralign;
+        int slice = 1;
+        while ((slice < 16) && !(align & slice) && (slice*2 <= width))
+        {
+            slice <<= 1;
+        }
+        /* Calculate size of inner rect */
+        int y0min,y0max,y1min,y1max;
+        do {
+            y0min = y0max = s_yminmax[x].min;
+            y1min = y1max = s_yminmax[x].max;
+            for(int i=1;i<slice;i++)
+            {
+                y0min = min(y0min,s_yminmax[x+i].min);
+                y0max = max(y0max,s_yminmax[x+i].min);
+                y1min = min(y1min,s_yminmax[x+i].max);
+                y1max = max(y1max,s_yminmax[x+i].max);
+            }
+            if ((y1min-y0max < 4) && (slice > 1))
+            {
+                /* No space for large rect, try smaller */
+                slice >>= 1;
+            }
+            else
+            {
+                break;
+            }
+        } while(1);
+        if (slice == 1)
+        {
+            int h = y1min-y0min;
+            if (h > 0)
+            {
+                arm_frameoffset = p + y0min*bpl;
+                func(h,&s_vlines[x],1);
+            }
+        }
+        else
+        {
+            if (y0min < y0max)
+            {
+                /* Draw top bits */
+                for(int i=0;i<slice;i++)
+                {
+                    int y = s_yminmax[x+i].min;
+                    int h = y0max-y;
+                    if (h > 0)
+                    {
+                        arm_frameoffset = p + y*bpl + i;
+                        func(h,&s_vlines[x+i],1);
+                    }
+                }
+            }
+            /* Draw middle */
+            arm_frameoffset = p + y0max*bpl;
+            int h = (y1min-y0max)&~3;
+            func(h,&s_vlines[x],slice);
+            y1min = y0max + h;
+            if (y1min < y1max)
+            {
+                /* Draw bottom bits */
+                for(int i=0;i<slice;i++)
+                {
+                    int h = s_yminmax[x+i].max-y1min;
+                    if (h > 0)
+                    {
+                        arm_frameoffset = p + y1min*bpl + i;
+                        func(h,&s_vlines[x+i],1);
+                    }
+                }
+            }
+        }
+        width -= slice;
+        x += slice;
+        p += slice;
+    }
+}
+
+static void set_arm_nonpow2(uint32_t *posbias,uint32_t *bufbias)
+{
+    /* With a bit of work, we can use SMLATT as a single-instruction way of
+       calculating texture addresses for non-pow2 textures. An unsigned
+       multiply would be easier to deal with, but there isn't really a suitable
+       instruction available (UMULL would work, but would need a spare register
+       to hold the low half of the result, and is slower since it does a full
+       32x32 -> 64bit multiply vs. SMLATT's 16x16 -> 32)
+     */
+
+    arm_tilesize = (globaltilesizy<<16) /* Texture height to multiply by */
+                 + ((globaltilesizy & 1)<<15); /* Accumulator input: Half-pixel bias for odd-height textures */
+    *posbias = 0x80000000; /* Unsigned -> signed bias applied to texture coord (to counter the fact that we're doing a signed multiply) */
+    *bufbias = (globaltilesizy>>1) /* Texture pointer is also biased by half the  texture height */
+             - globaltilesizy; /* Extra bias needed to counter the fact that all of w_tilesize is used as the accumulator input (when we only want to use the low half) */
+}
+
+#define USE_BLOCK_ASM
+#endif
+
+#ifdef USE_BLOCK_ASM
+//
+// maskwallscan (internal)
+//
+static void maskwallscan(int32_t x1, int32_t x2, int32_t saturatevplc)
+{
+    if (globalshiftval < 0) return;
+    if ((uwall[x1] > ydimen) && (uwall[x2] > ydimen)) return;
+    if ((dwall[x1] < 0) && (dwall[x2] < 0)) return;
+
+    vec2_16_t tsiz = tilesiz[globalpicnum];
+    if ((tsiz.x <= 0) || (tsiz.y <= 0)) return;
+
+    setgotpic(globalpicnum);
+
+    if (waloff[globalpicnum] == 0) tileLoad(globalpicnum);
+
+    tweak_tsizes(&tsiz);
+
+    if (EDUKE32_PREDICT_FALSE(palookup[globalpal] == NULL))
+        globalpal = 0;
+
+    intptr_t const fpalookup = FP_OFF(palookup[globalpal]);
+
+    setupmvlineasm(globalshiftval, saturatevplc);
+
+    int32_t x = x1;
+    while ((x <= x2) && (startumost[x+windowxy1.x] > startdmost[x+windowxy1.x]))
+        x++;
+
+    int32_t y1ve, y2ve;
+
+    arm_frameoffset = frameoffset + x;
+    int width = x2-x+1;
+    int i=0;
+    bool good=false;
+
+    uint32_t posbias=0,bufbias=0;
+#if defined(USE_ASMARM)
+    if (globalshiftval == 0)
+    {
+        set_arm_nonpow2(&posbias,&bufbias);
+    }
+#endif
+
+    for (; x<=x2; x++)
+    {
+        y1ve = max<int>(uwall[x],startumost[x+windowxy1.x]-windowxy1.y);
+        y2ve = min<int>(dwall[x],startdmost[x+windowxy1.x]-windowxy1.y);
+        s_yminmax[i].min = y1ve;
+        s_yminmax[i].max = y2ve;
+        if (y2ve <= y1ve) {i++; continue;}
+
+        palookupoffse[0] = fpalookup + getpalookupsh(mulscale16(swall[x],globvis));
+
+        calc_bufplc(&bufplce[0], lwall[x], tsiz);
+        calc_vplcinc(&vplce[0], &vince[0], swall, x, y1ve);
+
+        s_vlines[i].vpos = vplce[0] + posbias;
+        s_vlines[i].buf = ((uint8_t*) bufplce[0]) + bufbias;
+        s_vlines[i].vinc = vince[0];
+        s_vlines[i].pal = (uint8_t*) palookupoffse[0];
+        good=true;
+        i++;
+    }
+
+    if (good)
+    {
+        vlineblock(width,(globalshiftval ? mvblockasm : mvblocknasm),0);
+    }
+
+    faketimerhandler();
+}
+#else
 //
 // maskwallscan (internal)
 //
@@ -2074,6 +2284,7 @@ do_mvlineasm1:
 
     faketimerhandler();
 }
+#endif
 
 
 //
@@ -2936,7 +3147,92 @@ static void florscan(int32_t x1, int32_t x2, int32_t sectnum)
     faketimerhandler();
 }
 
+#ifdef USE_BLOCK_ASM
+//
+// wallscan (internal)
+//
+static void wallscan(int32_t x1, int32_t x2,
+                     const int16_t *uwal, const int16_t *dwal,
+                     const int32_t *swal, const int32_t *lwal)
+{
+    int32_t x;
+    intptr_t fpalookup;
+    int32_t y1ve, y2ve;
+    vec2_16_t tsiz;
 
+#ifdef YAX_ENABLE
+    if (g_nodraw)
+        return;
+#endif
+    setgotpic(globalpicnum);
+    if (globalshiftval < 0)
+        return;
+
+    if (x2 >= xdim)
+        x2 = xdim-1;
+    assert((unsigned)x1 < (unsigned)xdim);
+
+    tsiz = tilesiz[globalpicnum];
+
+    if ((tsiz.x <= 0) || (tsiz.y <= 0)) return;
+    if ((uwal[x1] > ydimen) && (uwal[x2] > ydimen)) return;
+    if ((dwal[x1] < 0) && (dwal[x2] < 0)) return;
+
+    if (waloff[globalpicnum] == 0) tileLoad(globalpicnum);
+
+    tweak_tsizes(&tsiz);
+
+    fpalookup = FP_OFF(palookup[globalpal]);
+
+    setupvlineasm(globalshiftval);
+
+
+    x = x1;
+    while ((x <= x2) && (umost[x] > dmost[x]))
+        x++;
+
+    arm_frameoffset = frameoffset + x;
+    int width = x2-x+1;
+    int i=0;
+    bool good=false;
+
+    uint32_t posbias=0,bufbias=0;
+#if defined(USE_ASMARM)
+    if (globalshiftval == 0)
+    {
+        set_arm_nonpow2(&posbias,&bufbias);
+    }
+#endif
+
+    for (; x<=x2; x++)
+    {
+        y1ve = max(uwal[x],umost[x]);
+        y2ve = min(dwal[x],dmost[x]);
+        s_yminmax[i].min = y1ve;
+        s_yminmax[i].max = y2ve;
+        if (y2ve <= y1ve) {i++; continue;}
+
+        palookupoffse[0] = fpalookup + getpalookupsh(mulscale16(swal[x],globvis));
+
+        calc_bufplc(&bufplce[0], lwal[x], tsiz);
+        calc_vplcinc(&vplce[0], &vince[0], swal, x, y1ve);
+
+        s_vlines[i].vpos = vplce[0] + posbias;
+        s_vlines[i].buf = ((uint8_t*) bufplce[0]) + bufbias;
+        s_vlines[i].vinc = vince[0];
+        s_vlines[i].pal = (uint8_t*) palookupoffse[0];
+        good=true;
+        i++;
+    }
+
+    if (good)
+    {
+        vlineblock(width,(globalshiftval ? vblockasm : vblocknasm),-1);
+    }
+
+    faketimerhandler();
+}
+#else
 //
 // wallscan (internal)
 //
@@ -3083,7 +3379,79 @@ do_vlineasm1:
 
     faketimerhandler();
 }
+#endif
 
+#ifdef USE_BLOCK_ASM
+//
+// transmaskwallscan (internal)
+//
+static void transmaskwallscan(int32_t x1, int32_t x2, int32_t saturatevplc)
+{
+    setgotpic(globalpicnum);
+
+    Bassert(globalshiftval>=0 || ((tilesiz[globalpicnum].x <= 0) || (tilesiz[globalpicnum].y <= 0)));
+    // globalshiftval<0 implies following condition
+    vec2_16_t tsiz = tilesiz[globalpicnum];
+    if ((tsiz.x <= 0) || (tsiz.y <= 0)) return;
+
+    if (waloff[globalpicnum] == 0) tileLoad(globalpicnum);
+
+    tweak_tsizes(&tsiz);
+
+    intptr_t const fpalookup = FP_OFF(palookup[globalpal]);
+
+    setuptvlineasm(globalshiftval, saturatevplc);
+
+    if (x2 >= xdimen) x2 = xdimen-1;
+
+    int32_t x = x1;
+    while ((x <= x2) && (startumost[x+windowxy1.x] > startdmost[x+windowxy1.x]))
+        ++x;
+
+    int32_t y1ve, y2ve;
+
+    arm_frameoffset = frameoffset + x;
+    int width = x2-x+1;
+    int i=0;
+    bool good=false;
+
+    uint32_t posbias=0,bufbias=0;
+#if defined(USE_ASMARM)
+    if (globalshiftval == 0)
+    {
+        set_arm_nonpow2(&posbias,&bufbias);
+    }
+#endif
+
+    for (; x<=x2; x++)
+    {
+        y1ve = max<int>(uwall[x],startumost[x+windowxy1.x]-windowxy1.y);
+        y2ve = min<int>(dwall[x],startdmost[x+windowxy1.x]-windowxy1.y);
+        s_yminmax[i].min = y1ve;
+        s_yminmax[i].max = y2ve;
+        if (y2ve <= y1ve) {i++; continue;}
+
+        palookupoffse[0] = fpalookup + getpalookupsh(mulscale16(swall[x],globvis));
+
+        calc_bufplc(&bufplce[0], lwall[x], tsiz);
+        calc_vplcinc(&vplce[0], &vince[0], swall, x, y1ve);
+
+        s_vlines[i].vpos = vplce[0] + posbias;
+        s_vlines[i].buf = ((uint8_t*) bufplce[0]) + bufbias;
+        s_vlines[i].vinc = vince[0];
+        s_vlines[i].pal = (uint8_t*) palookupoffse[0];
+        good=true;
+        i++;
+    }
+
+    if (good)
+    {
+        vlineblock(width,(globalshiftval ? tvblockasm : tvblocknasm),-1);
+    }
+
+    faketimerhandler();
+}
+#else
 //
 // transmaskvline (internal)
 //
@@ -3218,6 +3586,7 @@ static void transmaskwallscan(int32_t x1, int32_t x2, int32_t saturatevplc)
 
     faketimerhandler();
 }
+#endif
 
 
 ////////// NON-power-of-two replacements for mhline/thline, adapted from a.c //////////
@@ -5083,7 +5452,7 @@ static void classicDrawVoxel(int32_t dasprx, int32_t daspry, int32_t dasprz, int
 
                         if (z1 < um) { yplc = yinc*(um-z1); z1 = um; }
                         else yplc = 0;
-                        
+
                         if (cstat & 8)
                             yinc = -yinc;
                         if (cstat & 8)
@@ -6966,6 +7335,492 @@ void dorotspr_handle_bit2(int32_t *sxptr, int32_t *syptr, int32_t *z, int32_t da
 }
 
 
+#ifdef USE_BLOCK_ASM
+//
+// dorotatesprite (internal)
+//
+//JBF 20031206: Thanks to Ken's hunting, s/(rx1|ry1|rx2|ry2)/n\1/ in this function
+static void dorotatesprite(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t picnum,
+                           int8_t dashade, char dapalnum, int32_t dastat, uint8_t daalpha, uint8_t dablend,
+                           int32_t cx1, int32_t cy1, int32_t cx2, int32_t cy2,
+                           int32_t uniqid)
+{
+    // NOTE: if these are made unsigned (for safety), angled tiles may draw
+    // incorrectly, showing vertical seams at intervals.
+    int32_t bx, by;
+
+    int32_t cosang, sinang, v, nextv, dax1, dax2, oy;
+    int32_t i, x, y, x1, y1, x2, y2, gx1, gy1;
+    intptr_t p, bufplc, palookupoffs;
+    int32_t xsiz, ysiz, xoff, yoff, npoints, yplc, yinc, lx, rx;
+    int32_t xv, yv, xv2, yv2;
+
+    int32_t ouryxaspect, ourxyaspect;
+
+    if (g_rotatespriteNoWidescreen)
+    {
+        dastat |= RS_STRETCH;
+        dastat &= ~RS_ALIGN_MASK;
+    }
+
+    //============================================================================= //POLYMOST BEGINS
+#ifdef USE_OPENGL
+    if (videoGetRenderMode() >= REND_POLYMOST && in3dmode())
+    {
+        polymost_dorotatesprite(sx,sy,z,a,picnum,dashade,dapalnum,dastat,daalpha,dablend,cx1,cy1,cx2,cy2,uniqid);
+        return;
+    }
+#else
+    UNREFERENCED_PARAMETER(uniqid);
+#endif
+    //============================================================================= //POLYMOST ENDS
+
+    // bound clipping rectangle to screen
+    if (cx1 < 0) cx1 = 0;
+    else if (cx1 > xdim-1) cx1 = xdim-1;
+    if (cy1 < 0) cy1 = 0;
+    else if (cy1 > ydim-1) cy1 = ydim-1;
+    if (cx2 < 0) cx2 = 0;
+    else if (cx2 > xdim-1) cx2 = xdim-1;
+    if (cy2 < 0) cy2 = 0;
+    else if (cy2 > ydim-1) cy2 = ydim-1;
+
+    xsiz = tilesiz[picnum].x;
+    ysiz = tilesiz[picnum].y;
+
+    if (dastat & RS_TOPLEFT)
+    {
+        // Bit 1<<4 set: origin is top left corner?
+        xoff = 0;
+        yoff = 0;
+    }
+    else
+    {
+        // Bit 1<<4 clear: origin is center of tile, and per-tile offset is applied.
+        // TODO: split the two?
+        xoff = picanm[picnum].xofs + (xsiz>>1);
+        yoff = picanm[picnum].yofs + (ysiz>>1);
+    }
+
+    // Bit 1<<2: invert y
+    if (dastat & RS_YFLIP)
+        yoff = ysiz-yoff;
+
+    cosang = sintable[(a+512)&2047];
+    sinang = sintable[a&2047];
+
+    dorotspr_handle_bit2(&sx, &sy, &z, dastat, cx1+cx2, cy1+cy2, &ouryxaspect, &ourxyaspect);
+
+    xv = mulscale14(cosang,z);
+    yv = mulscale14(sinang,z);
+    if ((dastat&RS_AUTO) || (dastat&RS_NOCLIP) == 0) //Don't aspect unscaled perms
+    {
+        xv2 = mulscale16(xv,ourxyaspect);
+        yv2 = mulscale16(yv,ourxyaspect);
+    }
+    else
+    {
+        xv2 = xv;
+        yv2 = yv;
+    }
+
+    nry1[0] = sy - (yv*xoff + xv*yoff);
+    nry1[1] = nry1[0] + yv*xsiz;
+    nry1[3] = nry1[0] + xv*ysiz;
+    nry1[2] = nry1[1]+nry1[3]-nry1[0];
+    i = (cy1<<16); if ((nry1[0]<i) && (nry1[1]<i) && (nry1[2]<i) && (nry1[3]<i)) return;
+    i = (cy2<<16); if ((nry1[0]>i) && (nry1[1]>i) && (nry1[2]>i) && (nry1[3]>i)) return;
+
+    nrx1[0] = sx - (xv2*xoff - yv2*yoff);
+    nrx1[1] = nrx1[0] + xv2*xsiz;
+    nrx1[3] = nrx1[0] - yv2*ysiz;
+    nrx1[2] = nrx1[1]+nrx1[3]-nrx1[0];
+    i = (cx1<<16); if ((nrx1[0]<i) && (nrx1[1]<i) && (nrx1[2]<i) && (nrx1[3]<i)) return;
+    i = (cx2<<16); if ((nrx1[0]>i) && (nrx1[1]>i) && (nrx1[2]>i) && (nrx1[3]>i)) return;
+
+    gx1 = nrx1[0]; gy1 = nry1[0];   //back up these before clipping
+
+    npoints = clippoly4(cx1<<16,cy1<<16,(cx2+1)<<16,(cy2+1)<<16);
+    if (npoints < 3) return;
+
+    lx = nrx1[0]; rx = nrx1[0];
+
+    nextv = 0;
+    for (v=npoints-1; v>=0; v--)
+    {
+        x1 = nrx1[v]; x2 = nrx1[nextv];
+        dax1 = (x1>>16); if (x1 < lx) lx = x1;
+        dax2 = (x2>>16); if (x1 > rx) rx = x1;
+        if (dax1 != dax2)
+        {
+            y1 = nry1[v]; y2 = nry1[nextv];
+            yinc = divscale16(y2-y1,x2-x1);
+            if (dax2 > dax1)
+            {
+                yplc = y1 + mulscale16((dax1<<16)+65535-x1,yinc);
+                // Assertion fails with DNF mod: in mapster32,
+                // set dt_t 3864  (bike HUD, 700x220)
+                // set dt_a 100
+                // set dt_z 1280000  <- CRASH!
+                Bassert((unsigned)dax1 < MAXXDIM && (unsigned)dax2 < MAXXDIM+1);
+                qinterpolatedown16short((intptr_t)&uplc[dax1], dax2-dax1, yplc, yinc);
+            }
+            else
+            {
+                yplc = y2 + mulscale16((dax2<<16)+65535-x2,yinc);
+                Bassert((unsigned)dax2 < MAXXDIM && (unsigned)dax1 < MAXXDIM+1);
+                qinterpolatedown16short((intptr_t)&dplc[dax2], dax1-dax2, yplc, yinc);
+            }
+        }
+        nextv = v;
+    }
+
+    if (waloff[picnum] == 0) tileLoad(picnum);
+    setgotpic(picnum);
+    bufplc = waloff[picnum];
+
+    if (palookup[dapalnum] == NULL) dapalnum = 0;
+    palookupoffs = FP_OFF(palookup[dapalnum]) + (getpalookup(0, dashade)<<8);
+
+    // Alpha handling
+    if (!(dastat&RS_TRANS1) && daalpha > 0)
+    {
+        if (daalpha == 255)
+            return;
+
+        if (numalphatabs != 0)
+        {
+            if (falpha_to_blend((float)daalpha / 255.0f, &dastat, &dablend, RS_TRANS1, RS_TRANS2))
+                return;
+        }
+        else if (daalpha > 84)
+        {
+            dastat |= RS_TRANS1;
+
+            if (daalpha > 168)
+                dastat |= RS_TRANS2;
+            else
+                dastat &= ~RS_TRANS2;
+
+            // Blood's transparency table is inverted
+            if (bloodhack)
+                dastat ^= RS_TRANS2;
+        }
+    }
+
+    i = divscale32(1L,z);
+    xv = mulscale14(sinang,i);
+    yv = mulscale14(cosang,i);
+    if ((dastat&RS_AUTO) || (dastat&RS_NOCLIP)==0) //Don't aspect unscaled perms
+    {
+        yv2 = mulscale16(-xv,ouryxaspect);
+        xv2 = mulscale16(yv,ouryxaspect);
+    }
+    else
+    {
+        yv2 = -xv;
+        xv2 = yv;
+    }
+
+    x1 = (lx>>16);
+    x2 = (rx>>16);
+
+    oy = 0;
+    x = (x1<<16)-1-gx1;
+    y = (oy<<16)+65535-gy1;
+    bx = dmulscale16(x,xv2,y,xv);
+    by = dmulscale16(x,yv2,y,yv);
+
+    if (dastat & RS_YFLIP)
+    {
+        yv = -yv;
+        yv2 = -yv2;
+        by = (ysiz<<16)-1-by;
+    }
+
+#if defined ENGINE_USING_A_C
+    if ((dastat&RS_TRANS1)==0 && ((a&1023) == 0) && (ysiz <= 256))  //vlineasm4 has 256 high limit!
+#else
+    if ((dastat&RS_TRANS1) == 0)
+#endif
+    {
+        int32_t y1ve[4], y2ve[4], u4, d4;
+
+        if (((a&1023) == 0) && (ysiz <= 256))  //vlineasm4 has 256 high limit!
+        {
+            if (dastat & RS_NOMASK)
+                setupvlineasm(24L);
+            else
+                setupmvlineasm(24L, 0);
+
+            by <<= 8; yv <<= 8; yv2 <<= 8;
+
+            arm_frameoffset = frameplace + x1;
+            int width = x2-x1;
+            int i=0;
+            bool good=false;
+
+            for (x=x1; x<x2; x++)
+            {
+                bx += xv2;
+
+                y1 = uplc[x]; y2 = dplc[x];
+                if ((dastat & RS_NOCLIP) == 0)
+                {
+                    if (startumost[x] > y1) y1 = startumost[x];
+                    if (startdmost[x] < y2) y2 = startdmost[x];
+                }
+                s_yminmax[i].min = y1;
+                s_yminmax[i].max = y2;
+                if (y2 <= y1) {i++; continue;}
+
+                by += (uint32_t)yv*(y1-oy); oy = y1;
+
+                // Assertion would fail with DNF mod without (uint32_t) below: in mapster32,
+                // set dt_t 3864  (bike HUD, 700x220)
+                // set dt_z 16777216
+                // <Increase yxaspect by pressing [9]>  <-- CRASH!
+                // (It also fails when wrecking the bike in-game by driving into a wall.)
+//                Bassert(bx >= 0);
+
+                s_vlines[i].vpos = by;
+                s_vlines[i].buf = (uint8_t*) (((uint32_t)bx>>16)*ysiz+bufplc);
+                s_vlines[i].vinc = yv;
+                s_vlines[i].pal = (uint8_t*) palookupoffs;
+                good=true;
+                i++;
+            }
+
+            if (good)
+            {
+                if (dastat & RS_NOMASK)
+                {
+                    vlineblock(width,vblockasm,-1);
+                }
+                else
+                {
+                    vlineblock(width,mvblockasm,0);
+                }
+            }
+            faketimerhandler();
+        }
+#ifndef ENGINE_USING_A_C
+        else
+        {
+            int32_t ny1, ny2;
+            int32_t qlinemode = 0;
+
+            if (dastat & RS_NOMASK)
+            {
+                if ((xv2&0x0000ffff) == 0)
+                {
+                    qlinemode = 1;
+                    setupqrhlineasm4(0L,yv2<<16,(xv2>>16)*ysiz+(yv2>>16),palookupoffs,0L,0L);
+                }
+                else
+                {
+                    qlinemode = 0;
+                    setuprhlineasm4(xv2<<16,yv2<<16,(xv2>>16)*ysiz+(yv2>>16),palookupoffs,ysiz,0L);
+                }
+            }
+            else
+                setuprmhlineasm4(xv2<<16,yv2<<16,(xv2>>16)*ysiz+(yv2>>16),palookupoffs,ysiz,0L);
+
+            y1 = uplc[x1];
+            if (((dastat & RS_NOCLIP) == 0) && startumost[x1] > y1)
+                y1 = startumost[x1];
+            y2 = y1;
+            for (x=x1; x<x2; x++)
+            {
+                ny1 = uplc[x]-1; ny2 = dplc[x];
+                if ((dastat & RS_NOCLIP) == 0)
+                {
+                    if (startumost[x]-1 > ny1) ny1 = startumost[x]-1;
+                    if (startdmost[x] < ny2) ny2 = startdmost[x];
+                }
+
+                if (ny1 < ny2-1)
+                {
+                    if (ny1 >= y2)
+                    {
+                        while (y1 < y2-1)
+                        {
+                            y1++; if ((y1&31) == 0) faketimerhandler();
+
+                            //x,y1
+                            bx += xv*(y1-oy); by += yv*(y1-oy); oy = y1;
+                            if (dastat & RS_NOMASK)
+                            {
+                                if (qlinemode) qrhlineasm4(x-lastx[y1],(bx>>16)*ysiz+(by>>16)+bufplc,0L,0L    ,by<<16,ylookup[y1]+x+frameplace);
+                                else rhlineasm4(x-lastx[y1],(bx>>16)*ysiz+(by>>16)+bufplc,0L,bx<<16,by<<16,ylookup[y1]+x+frameplace);
+                            }
+                            else rmhlineasm4(x-lastx[y1],(bx>>16)*ysiz+(by>>16)+bufplc,0L,bx<<16,by<<16,ylookup[y1]+x+frameplace);
+                        }
+                        y1 = ny1;
+                    }
+                    else
+                    {
+                        while (y1 < ny1)
+                        {
+                            y1++; if ((y1&31) == 0) faketimerhandler();
+
+                            //x,y1
+                            bx += xv*(y1-oy); by += yv*(y1-oy); oy = y1;
+                            if (dastat & RS_NOMASK)
+                            {
+                                if (qlinemode) qrhlineasm4(x-lastx[y1],(bx>>16)*ysiz+(by>>16)+bufplc,0L,0L    ,by<<16,ylookup[y1]+x+frameplace);
+                                else rhlineasm4(x-lastx[y1],(bx>>16)*ysiz+(by>>16)+bufplc,0L,bx<<16,by<<16,ylookup[y1]+x+frameplace);
+                            }
+                            else rmhlineasm4(x-lastx[y1],(bx>>16)*ysiz+(by>>16)+bufplc,0L,bx<<16,by<<16,ylookup[y1]+x+frameplace);
+                        }
+
+                        while (y1 > ny1) lastx[y1--] = x;
+                    }
+
+                    while (y2 > ny2)
+                    {
+                        y2--; if ((y2&31) == 0) faketimerhandler();
+
+                        //x,y2
+                        bx += xv*(y2-oy); by += yv*(y2-oy); oy = y2;
+                        if (dastat & RS_NOMASK)
+                        {
+                            if (qlinemode) qrhlineasm4(x-lastx[y2],(bx>>16)*ysiz+(by>>16)+bufplc,0L,0L    ,by<<16,ylookup[y2]+x+frameplace);
+                            else rhlineasm4(x-lastx[y2],(bx>>16)*ysiz+(by>>16)+bufplc,0L,bx<<16,by<<16,ylookup[y2]+x+frameplace);
+                        }
+                        else rmhlineasm4(x-lastx[y2],(bx>>16)*ysiz+(by>>16)+bufplc,0L,bx<<16,by<<16,ylookup[y2]+x+frameplace);
+                    }
+
+                    while (y2 < ny2) lastx[y2++] = x;
+                }
+                else
+                {
+                    while (y1 < y2-1)
+                    {
+                        y1++; if ((y1&31) == 0) faketimerhandler();
+
+                        //x,y1
+                        bx += xv*(y1-oy); by += yv*(y1-oy); oy = y1;
+                        if (dastat & RS_NOMASK)
+                        {
+                            if (qlinemode) qrhlineasm4(x-lastx[y1],(bx>>16)*ysiz+(by>>16)+bufplc,0L,0L    ,by<<16,ylookup[y1]+x+frameplace);
+                            else rhlineasm4(x-lastx[y1],(bx>>16)*ysiz+(by>>16)+bufplc,0L,bx<<16,by<<16,ylookup[y1]+x+frameplace);
+                        }
+                        else rmhlineasm4(x-lastx[y1],(bx>>16)*ysiz+(by>>16)+bufplc,0L,bx<<16,by<<16,ylookup[y1]+x+frameplace);
+                    }
+
+                    if (x == x2-1) { bx += xv2; by += yv2; break; }
+                    y1 = uplc[x+1];
+                    if (((dastat & RS_NOCLIP) == 0) && startumost[x+1] > y1)
+                        y1 = startumost[x+1];
+                    y2 = y1;
+                }
+                bx += xv2; by += yv2;
+            }
+
+            while (y1 < y2-1)
+            {
+                y1++; if ((y1&31) == 0) faketimerhandler();
+
+                //x2,y1
+                bx += xv*(y1-oy); by += yv*(y1-oy); oy = y1;
+                if (dastat & RS_NOMASK)
+                {
+                    if (qlinemode) qrhlineasm4(x2-lastx[y1],(bx>>16)*ysiz+(by>>16)+bufplc,0L,0L,by<<16,ylookup[y1]+x2+frameplace);
+                    else rhlineasm4(x2-lastx[y1],(bx>>16)*ysiz+(by>>16)+bufplc,0L,bx<<16,by<<16,ylookup[y1]+x2+frameplace);
+                }
+                else rmhlineasm4(x2-lastx[y1],(bx>>16)*ysiz+(by>>16)+bufplc,0L,bx<<16,by<<16,ylookup[y1]+x2+frameplace);
+            }
+        }
+#endif  // !defined ENGINE_USING_A_C
+    }
+    else
+    {
+        if ((dastat & RS_TRANS1) == 0)
+        {
+#if !defined ENGINE_USING_A_C
+            if (dastat & RS_NOMASK)
+                setupspritevline(palookupoffs,(xv>>16)*ysiz,xv<<16,ysiz,yv,0L);
+            else
+                msetupspritevline(palookupoffs,(xv>>16)*ysiz,xv<<16,ysiz,yv,0L);
+#else
+            if (dastat & RS_NOMASK)
+                setupspritevline(palookupoffs,xv,yv,ysiz);
+            else
+                msetupspritevline(palookupoffs,xv,yv,ysiz);
+#endif
+        }
+        else
+        {
+#if !defined ENGINE_USING_A_C
+            tsetupspritevline(palookupoffs,(xv>>16)*ysiz,xv<<16,ysiz,yv,0L);
+#else
+            tsetupspritevline(palookupoffs,xv,yv,ysiz);
+#endif
+            setup_blend(dablend, dastat & RS_TRANS2);
+        }
+
+        for (x=x1; x<x2; x++)
+        {
+            bx += xv2; by += yv2;
+
+            y1 = uplc[x]; y2 = dplc[x];
+            if ((dastat & RS_NOCLIP) == 0)
+            {
+                if (startumost[x] > y1) y1 = startumost[x];
+                if (startdmost[x] < y2) y2 = startdmost[x];
+            }
+            if (y2 <= y1) continue;
+
+            switch (y1-oy)
+            {
+            case -1:
+                bx -= xv; by -= yv; oy = y1; break;
+            case 0:
+                break;
+            case 1:
+                bx += xv; by += yv; oy = y1; break;
+            default:
+                bx += xv*(y1-oy); by += yv*(y1-oy); oy = y1; break;
+            }
+
+            p = ylookup[y1]+x+frameplace;
+
+            if ((dastat & RS_TRANS1) == 0)
+            {
+#if !defined ENGINE_USING_A_C
+                if (dastat & RS_NOMASK)
+                    spritevline(0L,by<<16,y2-y1+1,bx<<16,(bx>>16)*ysiz+(by>>16)+bufplc,p);
+                else
+                    mspritevline(0L,by<<16,y2-y1+1,bx<<16,(bx>>16)*ysiz+(by>>16)+bufplc,p);
+#else
+                if (dastat & RS_NOMASK)
+                    spritevline(bx&65535,by&65535,y2-y1+1,(bx>>16)*ysiz+(by>>16)+bufplc,p);
+                else
+                    mspritevline(bx&65535,by&65535,y2-y1+1,(bx>>16)*ysiz+(by>>16)+bufplc,p);
+#endif
+            }
+            else
+            {
+#if !defined ENGINE_USING_A_C
+                tspritevline(0L,by<<16,y2-y1+1,bx<<16,(bx>>16)*ysiz+(by>>16)+bufplc,p);
+#else
+                tspritevline(bx&65535,by&65535,y2-y1+1,(bx>>16)*ysiz+(by>>16)+bufplc,p);
+                //transarea += (y2-y1);
+#endif
+            }
+
+            faketimerhandler();
+        }
+    }
+
+    /*  if ((dastat & RS_PERM) && (origbuffermode == 0))
+        {
+            buffermode = obuffermode;
+            setactivepage(activepage);
+        }*/
+}
+#else
 //
 // dorotatesprite (internal)
 //
@@ -7505,6 +8360,7 @@ static void dorotatesprite(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t
             setactivepage(activepage);
         }*/
 }
+#endif
 
 static uint32_t msqrtasm(uint32_t c)
 {
@@ -8488,7 +9344,7 @@ void set_globalang(fix16_t const ang)
     fcosglobalang = fcosang;
     fsinglobalang = fsinang;
 #endif
-    
+
     cosglobalang = (int)fcosang;
     singlobalang = (int)fsinang;
 
@@ -9153,7 +10009,7 @@ killsprite:
                     glDepthMask(GL_TRUE);
 
                     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-                    
+
                     for (bssize_t k = j-1; k >= i; k--)
                     {
                         renderDrawSprite(k);

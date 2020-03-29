@@ -336,6 +336,8 @@ RELEASE := 1
 NOASM := 0
 # EXPERIMENTAL, unfinished x86_64 assembly routines. DO NOT ENABLE.
 USE_ASM64 := 0
+# ARM assembler routines
+USE_ASMARM := 0
 MEMMAP := 0
 CPLUSPLUS := 1
 
@@ -405,6 +407,11 @@ endif
 
 ifneq (i386,$(strip $(IMPLICIT_ARCH)))
     override NOASM := 1
+endif
+
+ifeq ($(SUBPLATFORM),RISCOS)
+    override NOASM := 1
+    override USE_ASMARM := 1
 endif
 
 ifeq (0,$(USE_OPENGL))
@@ -843,6 +850,9 @@ ifneq (0,$(NOASM))
 endif
 ifneq (0,$(USE_ASM64))
     COMPILERFLAGS += -DUSE_ASM64
+endif
+ifneq (0,$(USE_ASMARM))
+    COMPILERFLAGS += -DUSE_ASMARM
 endif
 ifneq (0,$(MEMMAP))
     ifeq ($(PLATFORM),DARWIN)

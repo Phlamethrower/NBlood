@@ -311,6 +311,9 @@ else
   ifneq (0,$(USE_ASM64))
     engine_objs += a64.yasm
   endif
+  ifneq (0,$(USE_ASMARM))
+    engine_objs += a-arm.s
+  endif
 endif
 ifeq (1,$(USE_OPENGL))
     engine_objs += glsurface.cpp voxmodel.cpp mdsprite.cpp tilepacker.cpp
@@ -1419,6 +1422,10 @@ $(duke3d_obj)/lunatic_%.def: $(lunatic_src)/%.lds | $(duke3d_obj)
 define OBJECTRULES
 
 include $(wildcard $($1_obj)/*.d)
+
+$$($1_obj)/%.$$o: $$($1_src)/%.s | $$($1_obj)
+	$$(COMPILE_STATUS)
+	$$(RECIPE_IF) $$(COMPILER_C) $$(c1_flags) -x assembler-with-cpp -c $$< -o $$@ $$(RECIPE_RESULT_COMPILE)
 
 $$($1_obj)/%.$$o: $$($1_src)/%.nasm | $$($1_obj)
 	$$(COMPILE_STATUS)

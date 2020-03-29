@@ -40,6 +40,20 @@ intptr_t a64_paloffs;
 char *a64_gtrans;
 #endif
 
+#ifdef USE_ASMARM
+// variables for a-arm.s
+extern "C" {
+extern int32_t arm_bpl,arm_glogy,arm_transmode;
+extern char *arm_gtrans;
+int32_t arm_bpl,arm_glogy,arm_transmode;
+char *arm_gtrans;
+}
+
+#define ARM_ASSIGN(var, val) var=val
+#else
+#define ARM_ASSIGN(var, val)
+#endif
+
 static int32_t bpl, transmode = 0;
 static char *gbuf;
 static int32_t glogx, glogy;
@@ -49,14 +63,15 @@ static char *gpal, *ghlinepal, *gtrans;
 static char *gpal2;
 
 //Global variable functions
-void setvlinebpl(int32_t dabpl) { A64_ASSIGN(a64_bpl, dabpl); bpl = dabpl;}
+void setvlinebpl(int32_t dabpl) { A64_ASSIGN(a64_bpl, dabpl); ARM_ASSIGN(arm_bpl, dabpl); bpl = dabpl; }
 void fixtransluscence(intptr_t datransoff)
 {
     A64_ASSIGN(a64_gtrans, (char *)datransoff);
+    ARM_ASSIGN(arm_gtrans, (char *)datransoff);
     gtrans = (char *)datransoff;
 }
-void settransnormal(void) { A64_ASSIGN(a64_transmode, 0); transmode = 0; }
-void settransreverse(void) { A64_ASSIGN(a64_transmode, 1); transmode = 1; }
+void settransnormal(void) { A64_ASSIGN(a64_transmode, 0); ARM_ASSIGN(arm_transmode, 0); transmode = 0; }
+void settransreverse(void) { A64_ASSIGN(a64_transmode, 1); ARM_ASSIGN(arm_transmode, 1); transmode = 1; }
 
 
 ///// Ceiling/floor horizontal line functions /////
@@ -142,7 +157,7 @@ static inline int32_t getpix(int32_t logy, const char *buf, uint32_t vplc)
     return logy ? buf[vplc>>logy] : buf[ourmulscale32(vplc,globaltilesizy)];
 }
 
-void setupvlineasm(int32_t neglogy) { glogy = neglogy; }
+void setupvlineasm(int32_t neglogy) { ARM_ASSIGN(arm_glogy, neglogy); glogy = neglogy; }
 // cnt+1 loop iterations!
 int32_t vlineasm1(int32_t vinc, intptr_t paloffs, bssize_t cnt, uint32_t vplc, intptr_t bufplc, intptr_t p)
 {
@@ -349,6 +364,7 @@ static int32_t g_saturate;  // -1 if saturating vplc is requested, 0 else
 
 void setupmvlineasm(int32_t neglogy, int32_t dosaturate)
 {
+    ARM_ASSIGN(arm_glogy, neglogy);
     glogy = neglogy;
     set_saturate(dosaturate);
 }
@@ -481,6 +497,7 @@ void mvlineasm4(bssize_t cnt, char *p)
 
 void setuptvlineasm(int32_t neglogy, int32_t dosaturate)
 {
+    ARM_ASSIGN(arm_glogy, neglogy);
     GLOGY = neglogy;
     set_saturate(dosaturate);
 }
