@@ -14,6 +14,8 @@ enum buildtimertype
     TIMER_QPC,
     TIMER_SDL,
     TIMER_RDTSC,
+    TIMER_CLIB,
+    TIMER_MOD,
     NUMTIMERS,
 };
 

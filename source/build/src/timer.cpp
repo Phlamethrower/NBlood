@@ -15,21 +15,19 @@
 # include <mmsystem.h>
 #endif
 
+#ifdef __riscos__
+# include "swis.h"
+# define Timer_Start 0x490c0
+# define Timer_Value 0x490c2
+#endif
+
 #include <atomic>
 
 #if defined RENDERTYPESDL && (SDL_MAJOR_VERSION >= 2)
 # define HAVE_TIMER_SDL
 #endif
 
-#if defined(__riscos__) && !defined(HAVE_TIMER_SDL)
-// Hack, use system time because we don't have anything better
-#define HAVE_TIMER_SDL
-#define SDL_GetPerformanceCounter clock
-static inline int SDL_GetPerformanceFrequency() { return CLOCKS_PER_SEC; }
-#define SDL_InitSubSystem(A) ((void) 0)
-#endif
-
-#if !defined _WIN32 && !defined HAVE_TIMER_SDL && !defined ZPL_HAVE_RDTSC
+#if !defined _WIN32 && !defined HAVE_TIMER_SDL && !defined ZPL_HAVE_RDTSC && !defined __riscos__
 # error No platform timer implementation!
 #endif
 
@@ -113,9 +111,18 @@ static FORCE_INLINE ATTRIBUTE((flatten)) uint64_t timerSampleRDTSC(void)
 
 int timerGetClockRate(void) { return clockTicksPerSecond; }
 
+static int timerGetCounterType(void);
+
 // returns ticks since epoch in the format and frequency specified
 template<typename T> T timerGetTicks(T freq)
 {
+#ifdef __riscos__
+    if (timerGetCounterType() == TIMER_MOD)
+    {
+        // Not relative to epoch time, but timerGetTicks / timerGetHiTicks is only used for interval timing anyway?
+        return (T) (timerGetPerformanceCounter() / ((T)1000000/freq));
+    }
+#endif
     timespec ts;
     enet_gettime(CLOCK_TYPE, &ts);
     return ts.tv_sec * freq + (T)((uint64_t)ts.tv_nsec * freq / (T)1000000000);
@@ -147,25 +154,23 @@ static inline int timerGetCounterType(void)
 {
     switch (sys_timer)
     {
-#ifdef HAVE_TIMER_SDL
         default:
         case TIMER_AUTO:
+#ifdef __riscos__
+        case TIMER_MOD:
+            return TIMER_MOD;
+        case TIMER_CLIB:
+            return TIMER_CLIB;
+#endif
+#ifdef HAVE_TIMER_SDL
         case TIMER_SDL:
             return TIMER_SDL;
 #endif // HAVE_TIMER_SDL
 #ifdef _WIN32
-#if !defined HAVE_TIMER_SDL
-        default:
-        case TIMER_AUTO:
-#endif // !HAVE_TIMER_SDL
         case TIMER_QPC:
             return TIMER_QPC;
 #endif // _WIN32
 #ifdef ZPL_HAVE_RDTSC
-#if !defined _WIN32 && !defined HAVE_TIMER_SDL
-        default:
-        case TIMER_AUTO:
-#endif // !_WIN32 && !HAVE_TIMER_SDL
         case TIMER_RDTSC:
             return TIMER_RDTSC;
 #endif
@@ -191,6 +196,15 @@ uint64_t timerGetPerformanceCounter(void)
 #ifdef ZPL_HAVE_RDTSC
         case TIMER_RDTSC: return timerSampleRDTSC();
 #endif
+#ifdef __riscos__
+        case TIMER_CLIB: return clock();
+        case TIMER_MOD:
+        {
+            uint32_t sec,msec;
+            _swix(Timer_Value,_OUTR(0,1),&sec,&msec);
+            return (((uint64_t)sec)*1000000) + msec;
+        }
+#endif
     }
 }
 
@@ -213,12 +227,16 @@ uint64_t timerGetPerformanceFrequency(void)
 #ifdef ZPL_HAVE_RDTSC
         case TIMER_RDTSC: return tsc_freq;
 #endif
+#ifdef __riscos__
+        case TIMER_CLIB: return CLOCKS_PER_SEC;
+        case TIMER_MOD: return 1000000;
+#endif
     }
 }
 
 static int osdcmd_sys_timer(osdcmdptr_t parm)
 {
-    static char constexpr const *s[] = { "auto", "QPC", "SDL", "RDTSC" };
+    static char constexpr const *s[] = { "auto", "QPC", "SDL", "RDTSC", "CLIB", "MOD" };
     int const r = osdcmd_cvar_set(parm);
 
     if (r != OSDCMD_OK)
@@ -236,8 +254,18 @@ static int osdcmd_sys_timer(osdcmdptr_t parm)
     if (sys_timer == TIMER_RDTSC)
         sys_timer = TIMER_AUTO;
 #endif
+#ifndef __riscos__
+    if ((sys_timer == TIMER_CLIB) || (sys_timer == TIMER_MOD))
+        sys_timer = TIMER_AUTO;
+#endif
     if ((unsigned)sys_timer >= NUMTIMERS)
         sys_timer = TIMER_AUTO;
+
+#ifdef __riscos__
+    /* Check TimerMod is available */
+    if ((timerGetCounterType() == TIMER_MOD) && _swix(Timer_Start,0))
+        sys_timer = TIMER_CLIB;
+#endif
 
     if (sys_timer != TIMER_AUTO || !OSD_ParsingScript())
 print_and_return:
@@ -273,9 +301,19 @@ int timerInit(int const tickspersecond)
 #ifdef ZPL_HAVE_RDTSC
                                                 "   3: CPU RDTSC instruction\n"
 #endif
-                                                , (void *)&sys_timer, CVAR_INT | CVAR_FUNCPTR, 0, 4 };
+#ifdef __riscos__
+                                                "   4: C library\n"
+                                                "   5: TimerMod\n"
+#endif
+                                                , (void *)&sys_timer, CVAR_INT | CVAR_FUNCPTR, 0, NUMTIMERS };
 
         OSD_RegisterCvar(&sys_timer_cvar, osdcmd_sys_timer);
+
+#ifdef __riscos__
+        /* Check TimerMod is available */
+        if ((timerGetCounterType() == TIMER_MOD) && _swix(Timer_Start,0))
+            sys_timer = TIMER_CLIB;
+#endif
 
 #ifdef HAVE_TIMER_SDL
         SDL_InitSubSystem(SDL_INIT_TIMER);
