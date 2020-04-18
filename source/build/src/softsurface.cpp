@@ -70,7 +70,7 @@ bool softsurface_initialize(vec2_t bufferResolution,
     scanPosLookupTable = (uint16_t *)(buffer + newBufferSize);
 
     // calculate the scanPosLookupTable for horizontal scaling
-    uint32_t incr = recXScale16;
+    uint32_t incr = 0;
     for (int32_t i = 0; i < destBufferRes.x; ++i)
     {
         scanPosLookupTable[i] = incr >> 16;
