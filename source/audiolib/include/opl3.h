@@ -105,6 +105,8 @@ struct _opl3_channel {
     Bit32s leftpan;
     Bit32s rightpan;
     Bit8u ch_num;
+    Bit16u active;
+    Bit16s last;
 };
 
 typedef struct _opl3_writebuf {

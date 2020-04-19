@@ -42,6 +42,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "opl3.h"
 
 #define RSM_FRAC    10
+#define ACTIVE      16384
 
 // Channel types
 
@@ -520,6 +521,7 @@ static void OPL3_EnvelopeCalc(opl3_slot *slot)
 static void OPL3_EnvelopeKeyOn(opl3_slot *slot, Bit8u type)
 {
     slot->key |= type;
+    slot->channel->active = ACTIVE;
 }
 
 static void OPL3_EnvelopeKeyOff(opl3_slot *slot, Bit8u type)
@@ -1081,6 +1083,10 @@ void OPL3_Generate(opl3_chip *chip, Bit16s *buf)
 
     for (ii = 0; ii < 36; ii++)
     {
+        if (!chip->slot[ii].channel->active)
+        {
+            continue;
+        }
         OPL3_SlotCalcFB(&chip->slot[ii]);
         OPL3_EnvelopeCalc(&chip->slot[ii]);
         OPL3_PhaseGenerate(&chip->slot[ii]);
@@ -1088,28 +1094,41 @@ void OPL3_Generate(opl3_chip *chip, Bit16s *buf)
     }
 
     chip->mixbuff[0] = 0;
+    chip->mixbuff[1] = 0;
     for (ii = 0; ii < 18; ii++)
     {
+        Bit16u active = chip->channel[ii].active;
+        if (!active)
+        {
+            continue;
+        }
         accm = 0;
         for (jj = 0; jj < 4; jj++)
         {
             accm += *chip->channel[ii].out[jj];
         }
         chip->mixbuff[0] += (Bit16s)((accm * chip->channel[ii].leftpan) >> 16);
+        chip->mixbuff[1] += (Bit16s)((accm * chip->channel[ii].rightpan) >> 16);
+
+        // Try and detect inactive channels so that we can put them to sleep
+        Bit16s activity = accm>>8;
+        if (activity == -1)
+        {
+            activity = 0;
+        }
+        if ((activity == chip->channel[ii].last) && !chip->channel[ii].slots[0]->key && !chip->channel[ii].slots[1]->key)
+        {
+            active--;
+        }
+        else
+        {
+            active = ACTIVE;
+        }
+        chip->channel[ii].active = active;
+        chip->channel[ii].last = activity;
     }
 
     buf[0] = OPL3_ClipSample(chip->mixbuff[0]);
-
-    chip->mixbuff[1] = 0;
-    for (ii = 0; ii < 18; ii++)
-    {
-        accm = 0;
-        for (jj = 0; jj < 4; jj++)
-        {
-            accm += *chip->channel[ii].out[jj];
-        }
-        chip->mixbuff[1] += (Bit16s)((accm * chip->channel[ii].rightpan) >> 16);
-    }
 
     if ((chip->timer & 0x3f) == 0x3f)
     {
@@ -1235,6 +1254,7 @@ void OPL3_Reset(opl3_chip *chip, Bit32u samplerate)
         chip->channel[channum].leftpan = 0x10000;
         chip->channel[channum].rightpan = 0x10000;
         chip->channel[channum].ch_num = channum;
+        chip->channel[channum].active = 0;
         OPL3_ChannelSetupAlg(&chip->channel[channum]);
     }
     chip->noise = 1;
