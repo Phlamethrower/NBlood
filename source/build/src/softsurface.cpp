@@ -10,6 +10,11 @@
 #include "pragmas.h"
 #include "build.h"
 
+// On ARM it's quicker to calculate the position directly
+#ifndef __arm__
+#define SCANPOS_LUT
+#endif
+
 static int bufferSize;
 static uint8_t* buffer;
 static vec2_t bufferRes;
@@ -22,8 +27,17 @@ static uint32_t recXScale16;
 
 static uint32_t pPal[256];
 
+#ifdef SCANPOS_LUT
 // lookup table to find the source position within a scanline
 static uint16_t* scanPosLookupTable;
+#endif
+
+#ifndef SCANPOS_LUT
+uint32_t *softsurface_get_pal()
+{
+    return pPal;
+}
+#endif
 
 template <uint32_t multiple>
 static uint32_t roundUp(uint32_t num)
@@ -62,11 +76,16 @@ bool softsurface_initialize(vec2_t bufferResolution,
     // allocate one continuous block of memory large enough to hold the buffer, the palette,
     // and the scanPosLookupTable while maintaining alignment for each
     uint32_t newBufferSize = roundUp<16>(bufferRes.x * bufferRes.y);
-    zpl_virtual_memory vm = Xvm_alloc(0, newBufferSize + sizeof(uint16_t) * destBufferRes.x);
+    zpl_virtual_memory vm = Xvm_alloc(0, newBufferSize
+#ifdef SCANPOS_LUT
+     + sizeof(uint16_t) * destBufferRes.x
+#endif
+     );
 
     bufferSize = vm.size;
     buffer     = (uint8_t *)vm.data;
 
+#ifdef SCANPOS_LUT
     scanPosLookupTable = (uint16_t *)(buffer + newBufferSize);
 
     // calculate the scanPosLookupTable for horizontal scaling
@@ -76,6 +95,7 @@ bool softsurface_initialize(vec2_t bufferResolution,
         scanPosLookupTable[i] = incr >> 16;
         incr += recXScale16;
     }
+#endif
 
     return true;
 }
@@ -88,7 +108,9 @@ void softsurface_destroy()
     Xvm_free(zpl_vm(buffer, bufferSize));
     buffer = nullptr;
 
+#ifdef SCANPOS_LUT
     scanPosLookupTable = 0;
+#endif
 
     xScale16 = 0;
     yScale16 = 0;
@@ -139,9 +161,26 @@ vec2_t softsurface_getDestinationBufferResolution()
     return destBufferRes;
 }
 
+#ifdef SCANPOS_LUT
 #define BLIT(x) pDst[x] = *((UINTTYPE*)(pPal+pSrc[pScanPos[x]]))
+#else
+#define BLIT(x) pDst[x] = pal[pSrc[scanPos>>16]]; scanPos += recXScale16
+#endif
 #define BLIT2(x) BLIT(x); BLIT(x+1)
+#if !defined(SCANPOS_LUT) && defined(__riscos__)
+// GCC does an awful job at optimising this code, refusing to interleave pixel processing. Interleave it manually.
+#define BLIT4(x) do { \
+uint32_t t0,t1,t2,t3; \
+t0 = pSrc[scanPos>>16]; scanPos += recXScale16; \
+t1 = pSrc[scanPos>>16]; scanPos += recXScale16; \
+t2 = pSrc[scanPos>>16]; scanPos += recXScale16; \
+t3 = pSrc[scanPos>>16]; scanPos += recXScale16; \
+t0 = pal[t0]; t1 = pal[t1]; t2 = pal[t2]; t3 = pal[t3]; \
+pDst[x] = t0; pDst[x+1] = t1; pDst[x+2] = t2; pDst[x+3] = t3; \
+} while(0)
+#else
 #define BLIT4(x) BLIT2(x); BLIT2(x+2)
+#endif
 #define BLIT8(x) BLIT4(x); BLIT4(x+4)
 #define BLIT16(x) BLIT8(x); BLIT8(x+8)
 #define BLIT32(x) BLIT16(x); BLIT16(x+16)
@@ -153,21 +192,33 @@ void softsurface_blitBufferInternal(UINTTYPE* destBuffer)
     UINTTYPE* __restrict pDst = destBuffer;
     const UINTTYPE* const pEnd = destBuffer+destBufferRes.x*mulscale16(yScale16, bufferRes.y);
     uint32_t remainder = 0;
+#ifndef SCANPOS_LUT
+    // Use a function to get the palette address - so that GCC uses the address directly, instead of generating slower code which (for every pixel!) calculates the address relative to another pointer it already has (sigh)
+    const uint32_t* __restrict pal = softsurface_get_pal();
+#endif
     while (pDst < pEnd)
     {
+#ifdef SCANPOS_LUT
         uint16_t* __restrict pScanPos = scanPosLookupTable;
+#else
+        uint32_t scanPos = 0;
+#endif
         UINTTYPE* const pScanEnd = pDst+destBufferRes.x;
-        while (pDst < pScanEnd-64)
+        while (pDst <= pScanEnd-64)
         {
             BLIT64(0);
             pDst += 64;
+#ifdef SCANPOS_LUT
             pScanPos += 64;
+#endif
         }
         while (pDst < pScanEnd)
         {
             BLIT(0);
             ++pDst;
+#ifdef SCANPOS_LUT
             ++pScanPos;
+#endif
         }
         pSrc += bufferRes.x;
 
@@ -187,9 +238,25 @@ void softsurface_blitBufferInternal(UINTTYPE* destBuffer)
     }
 }
 
+#ifdef SCANPOS_LUT
 #define NPBLIT(x) pDst[x] = pSrc[pScanPos[x]]
+#else
+#define NPBLIT(x) pDst[x] = pSrc[scanPos>>16]; scanPos += recXScale16
+#endif
 #define NPBLIT2(x) NPBLIT(x); NPBLIT(x+1)
+#if !defined(SCANPOS_LUT) && defined(__riscos__)
+// GCC does an awful job at optimising this code, refusing to interleave pixel processing. Interleave it manually.
+#define NPBLIT4(x) do { \
+uint32_t t0,t1,t2,t3; \
+t0 = pSrc[scanPos>>16]; scanPos += recXScale16; \
+t1 = pSrc[scanPos>>16]; scanPos += recXScale16; \
+t2 = pSrc[scanPos>>16]; scanPos += recXScale16; \
+t3 = pSrc[scanPos>>16]; scanPos += recXScale16; \
+pDst[x] = t0; pDst[x+1] = t1; pDst[x+2] = t2; pDst[x+3] = t3; \
+} while(0)
+#else
 #define NPBLIT4(x) NPBLIT2(x); NPBLIT2(x+2)
+#endif
 #define NPBLIT8(x) NPBLIT4(x); NPBLIT4(x+4)
 #define NPBLIT16(x) NPBLIT8(x); NPBLIT8(x+8)
 #define NPBLIT32(x) NPBLIT16(x); NPBLIT16(x+16)
@@ -210,19 +277,27 @@ void softsurface_blitBufferInternalNoPal(UINTTYPE* destBuffer)
         }
         else
         {
+#ifdef SCANPOS_LUT
             uint16_t* __restrict pScanPos = scanPosLookupTable;
+#else
+            uint32_t scanPos = 0;
+#endif
             UINTTYPE* const pScanEnd = pDst+destBufferRes.x;
-            while (pDst < pScanEnd-64)
+            while (pDst <= pScanEnd-64)
             {
                 NPBLIT64(0);
                 pDst += 64;
+#ifdef SCANPOS_LUT
                 pScanPos += 64;
+#endif
             }
             while (pDst < pScanEnd)
             {
                 NPBLIT(0);
                 ++pDst;
+#ifdef SCANPOS_LUT
                 ++pScanPos;
+#endif
             }
         }
         pSrc += bufferRes.x;
