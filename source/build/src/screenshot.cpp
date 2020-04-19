@@ -103,9 +103,11 @@ int videoCaptureScreen(const char *filename, char inverseit)
     else
 #endif
     {
+#pragma pack(push,1)
         struct {
             uint8_t r, g, b;
         } palette[256];
+#pragma pack(pop)
 
         if (inverseit)
         {
